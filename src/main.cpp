@@ -6,9 +6,11 @@
 WiFiClient net;
 MQTTClient client;
 
+const String GATE_ID = "2";
+const String MQTT_CONTROLLER_IP = "192.168.1.13";
+
 const int LIMIT_SWITCH_PIN = 5;
 const int SERVO_PIN = 2;
-const String GATE_ID = "2";
 
 const int delayT = 15;
 const int maxPos = 125; // close (increase to move further left)
@@ -93,17 +95,17 @@ void moveServoTo(int finalPos, bool check) {
         return;
     }
 
-    int buttonState = 0;
+    int buttonState = 1;
     for (pos += dpos; cmpFcn(pos, finalPos); pos += dpos) {
         moveServo(pos);
         buttonState = digitalRead(LIMIT_SWITCH_PIN);
         printState(pos, buttonState);
-        if (check && buttonState) {
+        if (check && !buttonState) {
             break;
         }
     }
 
-    if (check && buttonState) {
+    if (check && !buttonState) {
         pos -= dpos;
         moveServo(pos);
         buttonState = digitalRead(LIMIT_SWITCH_PIN);
@@ -113,7 +115,7 @@ void moveServoTo(int finalPos, bool check) {
 
 void setup() {
     Serial.begin(115200);
-    pinMode(LIMIT_SWITCH_PIN, INPUT);
+    pinMode(LIMIT_SWITCH_PIN, INPUT_PULLUP);
     myservo.attach(SERVO_PIN);
     
     moveServo(midPos);
@@ -121,9 +123,7 @@ void setup() {
 
     WiFi.begin(WIFI_SSID, WIFI_PASS);
 
-    // Note: Local domain names (e.g. "Computer.local" on OSX) are not supported
-    // by Arduino. You need to set the IP address directly.
-    client.begin("192.168.1.13", net);
+    client.begin(MQTT_CONTROLLER_IP.c_str(), net);
     client.onMessage(messageReceived);
 
     connect();
