@@ -3,11 +3,12 @@
 #include <ESP8266WiFi.h>
 #include <MQTT.h>
 
+#include "credentials.hpp"
+
 WiFiClient net;
 MQTTClient client;
 
-const String GATE_ID = "2";
-const String MQTT_CONTROLLER_IP = "192.168.1.13";
+const String GATE_ID = "6";
 
 const int LIMIT_SWITCH_PIN = 5;
 const int SERVO_PIN = 2;
@@ -15,7 +16,7 @@ const int SERVO_PIN = 2;
 const int delayT = 15;
 const int maxPos = 125; // close (increase to move further left)
 const int minPos = 25; // open (decrease to move further right)
-const int midPos = (maxPos + minPos)/2; // middle
+const int midPos = 80; // middle
 int pos = midPos;
 
 Servo myservo;
@@ -84,6 +85,11 @@ void moveServo(int pos) {
 }
 
 void moveServoTo(int finalPos, bool check) {
+    Serial.print("Moving servo to ");
+    Serial.print(finalPos);
+    Serial.print(" with check ");
+    Serial.println(check);
+
     using CmpFcn = std::function<bool(int, int)>;
 
     CmpFcn leFcn = std::less_equal<int>{};
@@ -123,7 +129,7 @@ void setup() {
 
     WiFi.begin(WIFI_SSID, WIFI_PASS);
 
-    client.begin(MQTT_CONTROLLER_IP.c_str(), net);
+    client.begin(MQTT_CONTROLLER_IP, net);
     client.onMessage(messageReceived);
 
     connect();
@@ -142,7 +148,6 @@ void loop() {
     if (gateCmd == GateCmd::OPEN) {
         Serial.println("Processing open cmd");
         if (gatePos != GatePos::OPENED) {
-            Serial.println("Moving servo");
             moveServoTo(midPos, false);
             moveServoTo(minPos, true);
         }
@@ -152,7 +157,6 @@ void loop() {
     } else if (gateCmd == GateCmd::CLOSE) {
         Serial.println("Processing close cmd");
         if (gatePos != GatePos::CLOSED) {
-            Serial.println("Moving servo");
             moveServoTo(midPos, false);
             moveServoTo(maxPos, true);
         }
@@ -162,7 +166,6 @@ void loop() {
     } else if (gateCmd == GateCmd::MIDDLE) {
         Serial.println("Processing middle cmd");
         if (gatePos != GatePos::MIDDLE) {
-            Serial.println("Moving servo");
             moveServoTo(midPos, false);
         }
         gateCmd = GateCmd::NONE;
