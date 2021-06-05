@@ -1,4 +1,4 @@
 #pragma once
-#include <WString.h>
+#include <string>
 
-void handleOTAUpdate(const String& gateId);
+void handleOTAUpdate(const std::string& gateId);

@@ -22,7 +22,7 @@ void update_error(int err) {
 
 static unsigned long lastUpdateTime = 0;
 
-void handleOTAUpdate(const String& gateId) {
+void handleOTAUpdate(const std::string& gateId) {
     if (WiFi.status() != WL_CONNECTED) {
         return;
     }

@@ -12,13 +12,13 @@
 WiFiClient net;
 MQTTClient client;
 
-const String GATE_ID = "7";
+std::string GATE_ID = "5";
 
 const int LIMIT_SWITCH_PIN = 5;
 const int SERVO_PIN = 2;
 
 // Changing this string will invalidate the existing contents.
-const std::string CHKSUM_STR = "eeprom_init_v3";
+const std::string CHKSUM_STR = "eeprom_init_v6";
 
 int maxPos = 125; // close (increase to move further left)
 int minPos = 25; // open (decrease to move further right)
@@ -32,6 +32,16 @@ std::string gateCmd = "";
 
 std::string gatePos = "middle";
 
+void publish(const std::string& topic, const std::string& payload) {
+    auto fullTopic = topic + "/" + GATE_ID;
+    client.publish(fullTopic.c_str(), payload.c_str());
+}
+
+void subscribe(const std::string& topic) {
+    auto fullTopic = topic + "/" + GATE_ID;
+    client.subscribe(fullTopic.c_str());
+}
+
 void connect() {
     Serial.print("checking wifi...");
     while (WiFi.status() != WL_CONNECTED) {
@@ -42,7 +52,7 @@ void connect() {
     Serial.print(WiFi.localIP());
 
     Serial.print("\nconnecting...");
-    String clientId = "savadhan-nodemcu-gate-" + GATE_ID;
+    auto clientId ="savadhan-nodemcu-gate-" + GATE_ID;
     while (!client.connect(clientId.c_str())) {
         Serial.print(".");
         delay(1000);
@@ -50,8 +60,8 @@ void connect() {
 
     Serial.println("\nconnected!");
 
-    client.publish("/heartbeat/" + GATE_ID, "hello");
-    client.subscribe("/gatecmd/" + GATE_ID);
+    publish("/heartbeat", "hello");
+    subscribe("/gatecmd");
 }
 
 void messageReceived(String &topic, String &payload) {
@@ -102,18 +112,26 @@ void moveServoTo(int finalPos, bool check, int delayT) {
     }
 }
 
-void writeChecksum(int* addr) {
-    for (size_t i=0; i < CHKSUM_STR.length(); ++i) {
-        EEPROM.write(*addr, CHKSUM_STR[i]);
+void writeStringToEEPROM(int* addr, const std::string& input) {
+    for (size_t i=0; i < input.length(); ++i) {
+        EEPROM.write(*addr, input[i]);
         (*addr)++;
     }
+    EEPROM.write(*addr, '\0');
+    (*addr)++;
 }
 
-std::string readChecksum(int* addr) {
+std::string readStringFromEEPROM(int* addr, size_t maxlen) {
     std::string result;
-    for (size_t i=0; i < CHKSUM_STR.length(); ++i) {
-        result.push_back(EEPROM.read(*addr));
+    result.reserve(maxlen);
+
+    for (size_t i=0; i < maxlen; ++i) {
+        char ch = EEPROM.read(*addr);
         (*addr)++;
+        if (ch == '\0') {
+            return result;
+        }
+        result.push_back(ch);
     }
     return result;
 }
@@ -135,7 +153,8 @@ void calibrate() {
 
     EEPROM.begin(512);
     int addr = 0;
-    writeChecksum(&addr);
+    writeStringToEEPROM(&addr, CHKSUM_STR);
+    writeStringToEEPROM(&addr, GATE_ID);
     EEPROM.put(addr, minPos); addr += sizeof(minPos);
     EEPROM.put(addr, maxPos); addr += sizeof(maxPos);
     EEPROM.commit();
@@ -160,15 +179,22 @@ void setup() {
 
     EEPROM.begin(512);
     int addr = 0;
-    auto chksum = readChecksum(&addr);
+    // +1 is important! When we wrote CHKSUM_STR, we occupied CHKSUM_STR.length()+1 
+    // bytes (1 for the trailing \0 character). Hence make sure to read upto the \0
+    // character again
+    auto chksum = readStringFromEEPROM(&addr, CHKSUM_STR.length()+1);
     if (chksum == CHKSUM_STR) {
-        Serial.print("Reading positions from EEROM: minPos = ");
+        GATE_ID = readStringFromEEPROM(&addr, 10);
+
         EEPROM.get(addr, minPos); addr += sizeof(minPos);
         Serial.print(minPos);
 
         EEPROM.get(addr, maxPos); addr += sizeof(maxPos);
-        Serial.print(", maxPos = ");
-        Serial.println(maxPos);
+
+        Serial.println("Reading from EEPROM:");
+        Serial.print("gate_id = "); Serial.println(GATE_ID.c_str());
+        Serial.print("minPos = "); Serial.println(minPos);
+        Serial.print("maxPos = "); Serial.println(maxPos);
 
         calibrated = true;
     } else {
@@ -233,7 +259,7 @@ void loop() {
     }
 
     if (gateCmd != "") {
-        client.publish("/gateack/" + GATE_ID, gateCmd.c_str());
+        publish("/gateack", gateCmd.c_str());
         gateCmd = "";
     }
 
@@ -241,11 +267,11 @@ void loop() {
     if (millisNow - lastMillis > 3000) {
         std::ostringstream os;
         os << "{"
-            << "\"gatePos\" : \"" << gatePos << "\", "
+            << "\"gatePos\" : \"" << gatePos.c_str() << "\", "
             << "\"ipAddress\": \"" << WiFi.localIP().toString().c_str() << "\""
             << "}";
         auto status = os.str();
-        client.publish("/heartbeat/" + GATE_ID, status.c_str());
+        publish("/heartbeat", status.c_str());
         lastMillis = millisNow;
     }
 }
