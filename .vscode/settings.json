@@ -1,0 +1,9 @@
+{
+    "editor.detectIndentation": false,
+    "editor.tabSize": 4,
+    "C_Cpp.clang_format_style": "LLVM",
+    "C_Cpp.clang_format_fallbackStyle": "LLVM",
+    "files.associations": {
+        "iosfwd": "cpp"
+    },
+}
