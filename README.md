@@ -1,7 +1,8 @@
 # Blast Gate Controller
 
-This code is for controlling a servo motor via an ESP 8266. This is part of an overall set of projects
-for automatically opening/closing dust collection blast gates for my woodworking workshop.
+This code is for controlling a servo motor using ESP 8266 via MQTT commands sent from a central gate coordinator. 
+This is part of an overall set of projects for automatically opening/closing dust collection blast gates for my 
+woodworking workshop.
 
 The code is meant to run on the following circuit schematic:
 
