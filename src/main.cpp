@@ -12,13 +12,14 @@
 WiFiClient net;
 MQTTClient client;
 
-std::string GATE_ID = "5";
+std::string GATE_ID = "4";
 
-const int LIMIT_SWITCH_PIN = 5;
-const int SERVO_PIN = 2;
+const int LIMIT_SWITCH_PIN = D1;
+const int SERVO_PWM_PIN = D4;
+const int SERVO_ENABLE_PIN = D8;
 
 // Changing this string will invalidate the existing contents.
-const std::string CHKSUM_STR = "eeprom_init_v6";
+const std::string CHKSUM_STR = "eeprom_init_v9";
 
 int maxPos = 125; // close (increase to move further left)
 int minPos = 25; // open (decrease to move further right)
@@ -28,7 +29,7 @@ bool calibrated = false;
 
 Servo myservo;
 
-std::string gateCmd = "";
+std::string cmdStr = "";
 
 std::string gatePos = "middle";
 
@@ -66,7 +67,7 @@ void connect() {
 
 void messageReceived(String &topic, String &payload) {
     Serial.println("incoming: " + topic + " - " + payload);
-    gateCmd = payload.c_str();
+    cmdStr = payload.c_str();
 }
 
 void printState(int pos, int buttonState) {
@@ -92,6 +93,9 @@ void moveServoTo(int finalPos, bool check, int delayT) {
         return;
     }
 
+    digitalWrite(SERVO_ENABLE_PIN, HIGH);
+    delay(10);
+    
     int buttonState = 1;
     for (pos += dpos; cmpFcn(pos, finalPos); pos += dpos) {
         myservo.write(pos);
@@ -110,6 +114,7 @@ void moveServoTo(int finalPos, bool check, int delayT) {
         buttonState = digitalRead(LIMIT_SWITCH_PIN);
         printState(pos, buttonState);
     }
+    digitalWrite(SERVO_ENABLE_PIN, LOW);
 }
 
 void writeStringToEEPROM(int* addr, const std::string& input) {
@@ -165,11 +170,16 @@ void calibrate() {
 void setup() {
     Serial.begin(115200);
     pinMode(LIMIT_SWITCH_PIN, INPUT_PULLUP);
-    myservo.attach(SERVO_PIN);
+    pinMode(SERVO_ENABLE_PIN, OUTPUT);
+    myservo.attach(SERVO_PWM_PIN);
     
-    myservo.write(midPos);
+    digitalWrite(SERVO_ENABLE_PIN, HIGH);
 
+    myservo.write(midPos);
+    delay(500);
     gatePos = "middle";
+
+    digitalWrite(SERVO_ENABLE_PIN, LOW);
 
     WiFi.mode(WIFI_STA);
     WiFi.begin(WIFI_SSID, WIFI_PASS);
@@ -224,7 +234,7 @@ void openClose(const std::string& finalPos) {
         pos1 = maxPos - 12;
         pos2 = maxPos;
     }
-    
+
     if (gatePos != finalPos) {
         moveServoTo(pos1, false, 15);
         moveServoTo(pos2, true, 60);
@@ -242,25 +252,25 @@ void loop() {
     
     handleOTAUpdate(GATE_ID);
 
-    if (gateCmd == "open" || gateCmd == "close") {
-        openClose(gateCmd);
-    } else if (gateCmd == "middle") {
+    if (cmdStr == "open" || cmdStr == "close") {
+        openClose(cmdStr);
+    } else if (cmdStr == "middle") {
         Serial.println("Processing middle cmd");
         if (gatePos != "middle") {
             moveServoTo(midPos, false, 15);
         }
         gatePos = "middle";
-    } else if (gateCmd == "calibrate") {
+    } else if (cmdStr == "calibrate") {
         calibrate();
-    } else if (gateCmd != "") {
+    } else if (cmdStr != "") {
         Serial.print("Invalid command: ");
-        Serial.println(gateCmd.c_str());
-        gateCmd = "";
+        Serial.println(cmdStr.c_str());
+        cmdStr = "";
     }
 
-    if (gateCmd != "") {
-        publish("/gateack", gateCmd.c_str());
-        gateCmd = "";
+    if (cmdStr != "") {
+        publish("/gateack", cmdStr.c_str());
+        cmdStr = "";
     }
 
     auto millisNow = millis();

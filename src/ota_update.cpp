@@ -62,7 +62,6 @@ void handleOTAUpdate(const std::string& gateId) {
         break;
 
     case HTTP_UPDATE_NO_UPDATES:
-        Serial.println("HTTP_UPDATE_NO_UPDATES");
         break;
 
     case HTTP_UPDATE_OK:
