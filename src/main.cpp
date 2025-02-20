@@ -1,13 +1,11 @@
 #include <cstdio>
 #include <sstream>
 #include <Servo.h>
-#include <ArduinoOTA.h>
 #include <ESP8266WiFi.h>
 #include <MQTT.h>
 #include <EEPROM.h>
 
 #include "credentials.hpp"
-#include "ota_update.hpp"
 
 WiFiClient net;
 MQTTClient client;
@@ -21,17 +19,14 @@ const int SERVO_ENABLE_PIN = D8;
 // Changing this string will invalidate the existing contents.
 const std::string CHKSUM_STR = "eeprom_init_v9";
 
-int maxPos = 125; // close (increase to move further left)
-int minPos = 25; // open (decrease to move further right)
-int midPos = 80; // middle
-int pos = midPos;
-bool calibrated = false;
+int closedPos = 100; // close (increase to move further left)
+int openPos = 20; // open (decrease to move further right)
 
 Servo myservo;
 
 std::string cmdStr = "";
 
-std::string gatePos = "middle";
+std::string gatePos = "close";
 
 void publish(const std::string& topic, const std::string& payload) {
     auto fullTopic = topic + "/" + GATE_ID;
@@ -76,47 +71,6 @@ void printState(int pos, int buttonState) {
     Serial.print(buf);
 }
 
-void moveServoTo(int finalPos, bool check, int delayT) {
-    Serial.print("Moving servo to ");
-    Serial.print(finalPos);
-    Serial.print(" with check ");
-    Serial.println(check);
-
-    using CmpFcn = std::function<bool(int, int)>;
-
-    CmpFcn leFcn = std::less_equal<int>{};
-    CmpFcn geFcn = std::greater_equal<int>{};
-
-    int dpos = (finalPos > pos) ? 2 : -2;
-    auto cmpFcn = (finalPos > pos) ? leFcn : geFcn;
-    if (pos == finalPos) {
-        return;
-    }
-
-    digitalWrite(SERVO_ENABLE_PIN, HIGH);
-    delay(10);
-    
-    int buttonState = 1;
-    for (pos += dpos; cmpFcn(pos, finalPos); pos += dpos) {
-        myservo.write(pos);
-        delay(delayT);
-        buttonState = digitalRead(LIMIT_SWITCH_PIN);
-        printState(pos, buttonState);
-        if (check && !buttonState) {
-            break;
-        }
-    }
-
-    if (check && !buttonState) {
-        pos -= dpos;
-        myservo.write(pos);
-        delay(delayT);
-        buttonState = digitalRead(LIMIT_SWITCH_PIN);
-        printState(pos, buttonState);
-    }
-    digitalWrite(SERVO_ENABLE_PIN, LOW);
-}
-
 void writeStringToEEPROM(int* addr, const std::string& input) {
     for (size_t i=0; i < input.length(); ++i) {
         EEPROM.write(*addr, input[i]);
@@ -141,32 +95,6 @@ std::string readStringFromEEPROM(int* addr, size_t maxlen) {
     return result;
 }
 
-void calibrate() {
-    Serial.println("Calibrating");
-    moveServoTo(150, true, 60);
-    maxPos = pos;
-    
-    moveServoTo(midPos, false, 60);
-
-    moveServoTo(10, true, 60);
-    minPos = pos;
-
-    midPos = (maxPos + minPos)/2;
-    moveServoTo(midPos, false, 15);
-
-    gatePos = "middle";
-
-    EEPROM.begin(512);
-    int addr = 0;
-    writeStringToEEPROM(&addr, CHKSUM_STR);
-    writeStringToEEPROM(&addr, GATE_ID);
-    EEPROM.put(addr, minPos); addr += sizeof(minPos);
-    EEPROM.put(addr, maxPos); addr += sizeof(maxPos);
-    EEPROM.commit();
-
-    calibrated = true;
-}
-
 void setup() {
     Serial.begin(115200);
     pinMode(LIMIT_SWITCH_PIN, INPUT_PULLUP);
@@ -175,9 +103,9 @@ void setup() {
     
     digitalWrite(SERVO_ENABLE_PIN, HIGH);
 
-    myservo.write(midPos);
+    myservo.write(closedPos);
     delay(500);
-    gatePos = "middle";
+    gatePos = "close";
 
     digitalWrite(SERVO_ENABLE_PIN, LOW);
 
@@ -196,17 +124,15 @@ void setup() {
     if (chksum == CHKSUM_STR) {
         GATE_ID = readStringFromEEPROM(&addr, 10);
 
-        EEPROM.get(addr, minPos); addr += sizeof(minPos);
-        Serial.print(minPos);
+        EEPROM.get(addr, openPos); addr += sizeof(openPos);
+        Serial.print(openPos);
 
-        EEPROM.get(addr, maxPos); addr += sizeof(maxPos);
+        EEPROM.get(addr, closedPos); addr += sizeof(closedPos);
 
         Serial.println("Reading from EEPROM:");
         Serial.print("gate_id = "); Serial.println(GATE_ID.c_str());
-        Serial.print("minPos = "); Serial.println(minPos);
-        Serial.print("maxPos = "); Serial.println(maxPos);
-
-        calibrated = true;
+        Serial.print("openPos = "); Serial.println(openPos);
+        Serial.print("closePos = "); Serial.println(closedPos);
     } else {
         Serial.print("Uninitialized data in EEPROM: ");
         Serial.println(chksum.c_str());
@@ -218,27 +144,20 @@ void setup() {
 unsigned long lastMillis = 0;
 
 void openClose(const std::string& finalPos) {
-    if (!calibrated) {
-        Serial.println("Calibrate first!");
-        return;
-    }
-
     Serial.print("Processing move cmd: ");
     Serial.println(finalPos.c_str());
 
-    int pos1, pos2;
+    if (gatePos == finalPos)
+        return;
+    
+    digitalWrite(SERVO_ENABLE_PIN, HIGH);
     if (finalPos == "open") {
-        pos1 = minPos + 12;
-        pos2 = minPos;
+        myservo.write(closedPos);
     } else {
-        pos1 = maxPos - 12;
-        pos2 = maxPos;
+        myservo.write(openPos);
     }
-
-    if (gatePos != finalPos) {
-        moveServoTo(pos1, false, 15);
-        moveServoTo(pos2, true, 60);
-    }
+    delay(500);
+    digitalWrite(SERVO_ENABLE_PIN, LOW);
     gatePos = finalPos;
 }
 
@@ -250,18 +169,8 @@ void loop() {
         delay(10);  // <- fixes some issues with WiFi stability
     }
     
-    handleOTAUpdate(GATE_ID);
-
     if (cmdStr == "open" || cmdStr == "close") {
         openClose(cmdStr);
-    } else if (cmdStr == "middle") {
-        Serial.println("Processing middle cmd");
-        if (gatePos != "middle") {
-            moveServoTo(midPos, false, 15);
-        }
-        gatePos = "middle";
-    } else if (cmdStr == "calibrate") {
-        calibrate();
     } else if (cmdStr != "") {
         Serial.print("Invalid command: ");
         Serial.println(cmdStr.c_str());
