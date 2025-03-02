@@ -4,6 +4,7 @@
 #include <ESP8266WiFi.h>
 #include <MQTT.h>
 #include <EEPROM.h>
+#include <cstdarg>
 
 #include "credentials.hpp"
 
@@ -18,7 +19,7 @@ const int SERVO_ENABLE_PIN = D8;
 const int SERVO_MOVE_TIME_MS = 1000;
 
 // Changing this string will invalidate the existing contents.
-const std::string CHKSUM_STR = "eeprom_init_v1";
+const std::string CHKSUM_STR = "2025-03-02-01";
 
 int closedPos = 20;
 int openPos = 110;
@@ -35,45 +36,54 @@ void publish(const std::string& topic, const std::string& payload) {
     client.publish(fullTopic.c_str(), payload.c_str());
 }
 
+// Function to both print to serial and publish to MQTT
+void logMessage(const char* format, ...) {
+    // First, print to serial
+    va_list args;
+    va_start(args, format);
+    char buffer[256];
+    vsnprintf(buffer, sizeof(buffer), format, args);
+    va_end(args);
+    
+    // Print to serial
+    Serial.print(buffer);
+    
+    // Publish to MQTT
+    publish("/gatelog", buffer);
+}
+
 void subscribe(const std::string& topic) {
     auto fullTopic = topic + "/" + GATE_ID;
     client.subscribe(fullTopic.c_str());
 }
 
 void connect() {
-    Serial.print("checking wifi...");
+    logMessage("checking wifi...");
     while (WiFi.status() != WL_CONNECTED) {
-        Serial.print(".");
+        logMessage(".");
         delay(1000);
     }
-    Serial.println("\nconnected! Local IP: ");
-    Serial.print(WiFi.localIP());
+    logMessage("\nconnected! Local IP: %s", WiFi.localIP().toString().c_str());
 
-    Serial.print("\nconnecting...");
+    logMessage("\nconnecting...");
     auto clientId ="savadhan-nodemcu-gate-" + GATE_ID;
     while (!client.connect(clientId.c_str())) {
-        Serial.print(".");
+        logMessage(".");
         delay(1000);
     }
 
-    Serial.println("\nconnected!");
+    logMessage("\nconnected!\n");
 
     publish("/heartbeat", "hello");
     subscribe("/gatecmd");
 }
 
 void messageReceived(String &topic, String &payload) {
-    Serial.println("incoming: " + topic + " - " + payload);
+    logMessage("incoming message: %s %s\n", topic.c_str(), payload.c_str());
     topicStr = topic.c_str();
     // Remove the final substring like "/10"
     topicStr = topicStr.substr(0, topicStr.size() - GATE_ID.size() - 1);
     payloadStr = payload.c_str();
-}
-
-void printState(int pos, int buttonState) {
-    char buf[128];
-    snprintf(buf, 128, "buttonState = %d, pos = %d\n", buttonState, pos);
-    Serial.print(buf);
 }
 
 void writeStringToEEPROM(int* addr, const std::string& input) {
@@ -128,19 +138,11 @@ void setup() {
     auto chksum = readStringFromEEPROM(&addr, CHKSUM_STR.length()+1);
     if (chksum == CHKSUM_STR) {
         GATE_ID = readStringFromEEPROM(&addr, 10);
-
         EEPROM.get(addr, openPos); addr += sizeof(openPos);
-        Serial.print(openPos);
-
         EEPROM.get(addr, closedPos); addr += sizeof(closedPos);
-
-        Serial.println("Reading from EEPROM:");
-        Serial.print("gate_id = "); Serial.println(GATE_ID.c_str());
-        Serial.print("openPos = "); Serial.println(openPos);
-        Serial.print("closePos = "); Serial.println(closedPos);
+        logMessage("Reading from EEPROM, gate+id = %s, openPos = %d, closePos = %d\n", GATE_ID.c_str(), openPos, closedPos);
     } else {
-        Serial.print("Uninitialized data in EEPROM: ");
-        Serial.println(chksum.c_str());
+        logMessage("Uninitialized data in EEPROM: %s\n", chksum.c_str());
     }
 
     connect();
@@ -149,8 +151,7 @@ void setup() {
 unsigned long lastMillis = 0;
 
 void openClose(const std::string& finalPos) {
-    Serial.print("Processing move cmd: ");
-    Serial.println(finalPos.c_str());
+    logMessage("Processing move cmd: %s\n", finalPos.c_str());
 
     if (gatePos == finalPos)
         return;
@@ -170,22 +171,26 @@ void openClose(const std::string& finalPos) {
 }
 
 void setLimits() {
-    try {
-        int& target = (topicStr == "gatemin") ? closedPos : openPos;
-        target = std::stoi(payloadStr);
-        Serial.printf("Setting %s = %d\n", topicStr.c_str(), target);
-    } catch (std::invalid_argument) {
-        Serial.printf("Invalid command: %s %s\n", topicStr.c_str(), payloadStr.c_str());
+    // First check if the string is empty
+    if (payloadStr.length() == 0) {
+        logMessage("Invalid command: %s %s (empty string)\n", topicStr.c_str(), payloadStr.c_str());
         return;
     }
 
-    EEPROM.begin(512);
-    int addr = 0;
-    writeStringToEEPROM(&addr, CHKSUM_STR);
-    writeStringToEEPROM(&addr, GATE_ID);
-    EEPROM.put(addr, closedPos); addr += sizeof(closedPos);
-    EEPROM.put(addr, openPos); addr += sizeof(openPos);
-    EEPROM.commit();
+    // Check if all characters are digits
+    int value = 0;
+    for (auto c: payloadStr) {
+        if (c < '0' || c > '9') {
+            logMessage("Invalid command: %s %s (not a number)\n", topicStr.c_str(), payloadStr.c_str());
+            return;
+        }
+        value = value*10 + (c - '0');
+    }
+    
+    // Set the appropriate target
+    int& target = (topicStr == "gatemin") ? closedPos : openPos;
+    target = value;
+    logMessage("Setting %s = %d\n", topicStr.c_str(), target);
 }
 
 void loop() {
@@ -200,9 +205,16 @@ void loop() {
         openClose(payloadStr);
     } else if (topicStr == "gatemin" || topicStr == "gatemax") {
         setLimits();
+    } else if (topicStr == "flash") {
+        EEPROM.begin(512);
+        int addr = 0;
+        writeStringToEEPROM(&addr, CHKSUM_STR);
+        writeStringToEEPROM(&addr, GATE_ID);
+        EEPROM.put(addr, closedPos); addr += sizeof(closedPos);
+        EEPROM.put(addr, openPos); addr += sizeof(openPos);
+        EEPROM.commit();
     } else if (payloadStr != "") {
-        Serial.print("Invalid command: ");
-        Serial.println(payloadStr.c_str());
+        logMessage("Invalid command %s %s\n", topicStr, payloadStr);
         payloadStr = "";
     }
 
