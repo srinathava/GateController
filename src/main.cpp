@@ -10,21 +10,23 @@
 WiFiClient net;
 MQTTClient client;
 
-std::string GATE_ID = "4";
+std::string GATE_ID = "10";
 
 const int LIMIT_SWITCH_PIN = D1;
 const int SERVO_PWM_PIN = D4;
 const int SERVO_ENABLE_PIN = D8;
+const int SERVO_MOVE_TIME_MS = 1000;
 
 // Changing this string will invalidate the existing contents.
-const std::string CHKSUM_STR = "eeprom_init_v9";
+const std::string CHKSUM_STR = "eeprom_init_v1";
 
-int closedPos = 100; // close (increase to move further left)
-int openPos = 20; // open (decrease to move further right)
+int closedPos = 20;
+int openPos = 110;
 
 Servo myservo;
 
-std::string cmdStr = "";
+std::string topicStr = "";
+std::string payloadStr = "";
 
 std::string gatePos = "close";
 
@@ -62,7 +64,10 @@ void connect() {
 
 void messageReceived(String &topic, String &payload) {
     Serial.println("incoming: " + topic + " - " + payload);
-    cmdStr = payload.c_str();
+    topicStr = topic.c_str();
+    // Remove the final substring like "/10"
+    topicStr = topicStr.substr(0, topicStr.size() - GATE_ID.size() - 1);
+    payloadStr = payload.c_str();
 }
 
 void printState(int pos, int buttonState) {
@@ -104,7 +109,7 @@ void setup() {
     digitalWrite(SERVO_ENABLE_PIN, HIGH);
 
     myservo.write(closedPos);
-    delay(500);
+    delay(SERVO_MOVE_TIME_MS);
     gatePos = "close";
 
     digitalWrite(SERVO_ENABLE_PIN, LOW);
@@ -152,13 +157,35 @@ void openClose(const std::string& finalPos) {
     
     digitalWrite(SERVO_ENABLE_PIN, HIGH);
     if (finalPos == "open") {
-        myservo.write(closedPos);
-    } else {
         myservo.write(openPos);
+    } else if (finalPos == "close") {
+        myservo.write(closedPos);
+    } else if (finalPos == "middle") {
+        auto midPos = (openPos + closedPos)/2;
+        myservo.write(midPos);
     }
-    delay(500);
+    delay(SERVO_MOVE_TIME_MS);
     digitalWrite(SERVO_ENABLE_PIN, LOW);
     gatePos = finalPos;
+}
+
+void setLimits() {
+    try {
+        int& target = (topicStr == "gatemin") ? closedPos : openPos;
+        target = std::stoi(payloadStr);
+        Serial.printf("Setting %s = %d\n", topicStr.c_str(), target);
+    } catch (std::invalid_argument) {
+        Serial.printf("Invalid command: %s %s\n", topicStr.c_str(), payloadStr.c_str());
+        return;
+    }
+
+    EEPROM.begin(512);
+    int addr = 0;
+    writeStringToEEPROM(&addr, CHKSUM_STR);
+    writeStringToEEPROM(&addr, GATE_ID);
+    EEPROM.put(addr, closedPos); addr += sizeof(closedPos);
+    EEPROM.put(addr, openPos); addr += sizeof(openPos);
+    EEPROM.commit();
 }
 
 void loop() {
@@ -169,25 +196,28 @@ void loop() {
         delay(10);  // <- fixes some issues with WiFi stability
     }
     
-    if (cmdStr == "open" || cmdStr == "close") {
-        openClose(cmdStr);
-    } else if (cmdStr != "") {
+    if (topicStr == "gatecmd") {
+        openClose(payloadStr);
+    } else if (topicStr == "gatemin" || topicStr == "gatemax") {
+        setLimits();
+    } else if (payloadStr != "") {
         Serial.print("Invalid command: ");
-        Serial.println(cmdStr.c_str());
-        cmdStr = "";
+        Serial.println(payloadStr.c_str());
+        payloadStr = "";
     }
 
-    if (cmdStr != "") {
-        publish("/gateack", cmdStr.c_str());
-        cmdStr = "";
+    if (payloadStr != "") {
+        publish("/gateack", payloadStr.c_str());
+        payloadStr = "";
     }
 
     auto millisNow = millis();
     if (millisNow - lastMillis > 3000) {
         std::ostringstream os;
         os << "{"
-            << "\"gatePos\" : \"" << gatePos.c_str() << "\", "
-            << "\"ipAddress\": \"" << WiFi.localIP().toString().c_str() << "\""
+            << "\"gatePos\" : \"" << gatePos.c_str()
+            << ", \"openPos\": " << openPos
+            << ", \"closedPos\": " << closedPos
             << "}";
         auto status = os.str();
         publish("/heartbeat", status.c_str());
