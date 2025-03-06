@@ -27,7 +27,7 @@ const std::string CHKSUM_STR = "2025-03-05-01";
 WiFiClient net;
 MQTTClient client;
 
-int closedPos = 20;
+int closePos = 20;
 int openPos = 110;
 
 Servo myservo;
@@ -36,7 +36,7 @@ std::string topicStr = "";
 std::string payloadStr = "";
 
 std::string gatePosStr = "close";
-int gatePosInt = closedPos;
+int gatePosInt = closePos;
 
 void publish(const std::string &topic, const std::string &payload) {
     auto fullTopic = topic + "/" + GATE_ID;
@@ -90,7 +90,7 @@ void connect() {
 
     publish("/heartbeat", "hello");
     subscribe("/gatecmd");
-    subscribe("/setclosedpos");
+    subscribe("/setclosepos");
     subscribe("/setopenpos");
     subscribe("/flash");
 }
@@ -137,10 +137,10 @@ void moveServoTo(const std::string &finalPos) {
     if (finalPos == "open") {
         gatePosInt = openPos;
     } else if (finalPos == "close") {
-        gatePosInt = closedPos;
-        myservo.write(closedPos);
+        gatePosInt = closePos;
+        myservo.write(closePos);
     } else if (finalPos == "middle") {
-        gatePosInt = (openPos + closedPos) / 2;
+        gatePosInt = (openPos + closePos) / 2;
     } else {
         logMessage("Unknown target position %s\n", finalPos.c_str());
         return;
@@ -174,9 +174,9 @@ void setLimits() {
         value = value * 10 + (c - '0');
     }
 
-    bool isCloseCmd = (topicStr == "setclosedpos");
+    bool isCloseCmd = (topicStr == "setclosepos");
     // Set the appropriate target
-    int &target = isCloseCmd ? closedPos : openPos;
+    int &target = isCloseCmd ? closePos : openPos;
     target = value;
     moveServoTo(isCloseCmd ? "close" : "open");
     logMessage("Setting %s = %d\n", topicStr.c_str(), target);
@@ -203,11 +203,11 @@ void setup() {
         GATE_ID = readStringFromEEPROM(&addr, 10);
         EEPROM.get(addr, openPos);
         addr += sizeof(openPos);
-        EEPROM.get(addr, closedPos);
-        addr += sizeof(closedPos);
+        EEPROM.get(addr, closePos);
+        addr += sizeof(closePos);
         logMessage(
             "Reading from EEPROM, gate+id = %s, openPos = %d, closePos = %d\n",
-            GATE_ID.c_str(), openPos, closedPos);
+            GATE_ID.c_str(), openPos, closePos);
     } else {
         logMessage("Uninitialized data in EEPROM: %s\n", chksum.c_str());
     }
@@ -227,15 +227,15 @@ void loop() {
 
     if (topicStr == "gatecmd") {
         moveServoTo(payloadStr);
-    } else if (topicStr == "setclosedpos" || topicStr == "setopenpos") {
+    } else if (topicStr == "setclosepos" || topicStr == "setopenpos") {
         setLimits();
     } else if (topicStr == "flash") {
         EEPROM.begin(512);
         int addr = 0;
         writeStringToEEPROM(&addr, CHKSUM_STR);
         writeStringToEEPROM(&addr, GATE_ID);
-        EEPROM.put(addr, closedPos);
-        addr += sizeof(closedPos);
+        EEPROM.put(addr, closePos);
+        addr += sizeof(closePos);
         EEPROM.put(addr, openPos);
         addr += sizeof(openPos);
         EEPROM.commit();
@@ -255,7 +255,7 @@ void loop() {
         os << "{"
            << "\"gatePos\" : \"" << gatePosStr.c_str() << "\""
            << ", \"openPos\": " << openPos 
-           << ", \"closedPos\": " << closedPos
+           << ", \"closedPos\": " << closePos
            << "}";
         auto status = os.str();
         publish("/heartbeat", status.c_str());
