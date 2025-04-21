@@ -1,28 +1,34 @@
-#include <cstdio>
-#include <sstream>
-#include <Servo.h>
+#include <EEPROM.h>
 #include <ESP8266WiFi.h>
 #include <MQTT.h>
-#include <EEPROM.h>
+#include <Servo.h>
 #include <cstdarg>
+#include <cstdio>
+#include <sstream>
 
 #include "credentials.hpp"
+
+std::string GATE_ID = "11";
+
+#define USE_WEMOS_D1_MINI
+#ifdef USE_WEMOS_D1_MINI
+const int SERVO_PWM_PIN = D3;
+const int SERVO_ENABLE_PIN = D2;
+#else
+const int SERVO_PWM_PIN = D4;
+const int SERVO_ENABLE_PIN = D8;
+#endif
+
+const int SERVO_MOVE_TIME_MS = 1000;
+
+// Changing this string will invalidate the existing contents.
+const std::string CHKSUM_STR = "2025-03-05-01";
 
 WiFiClient net;
 MQTTClient client;
 
-std::string GATE_ID = "4";
-
-const int LIMIT_SWITCH_PIN = D1;
-const int SERVO_PWM_PIN = D4;
-const int SERVO_ENABLE_PIN = D8;
-const int SERVO_MOVE_TIME_MS = 1000;
-
-// Changing this string will invalidate the existing contents.
-const std::string CHKSUM_STR = "2025-03-02-02";
-
-int closedPos = 40;
-int openPos = 80;
+int closePos = 20;
+int openPos = 110;
 
 Servo myservo;
 
@@ -31,28 +37,28 @@ std::string payloadStr = "";
 
 std::string gatePos = "";
 
-void publish(const std::string& topic, const std::string& payload) {
+void publish(const std::string &topic, const std::string &payload) {
     auto fullTopic = topic + "/" + GATE_ID;
     client.publish(fullTopic.c_str(), payload.c_str());
 }
 
 // Function to both print to serial and publish to MQTT
-void logMessage(const char* format, ...) {
+void logMessage(const char *format, ...) {
     // First, print to serial
     va_list args;
     va_start(args, format);
     char buffer[256];
     vsnprintf(buffer, sizeof(buffer), format, args);
     va_end(args);
-    
+
     // Print to serial
     Serial.print(buffer);
-    
+
     // Publish to MQTT
     publish("/gatelog", buffer);
 }
 
-void subscribe(const std::string& topic) {
+void subscribe(const std::string &topic) {
     auto fullTopic = topic + "/" + GATE_ID;
     client.subscribe(fullTopic.c_str());
 }
@@ -87,8 +93,8 @@ void messageReceived(String &topic, String &payload) {
     payloadStr = payload.c_str();
 }
 
-void writeStringToEEPROM(int* addr, const std::string& input) {
-    for (size_t i=0; i < input.length(); ++i) {
+void writeStringToEEPROM(int *addr, const std::string &input) {
+    for (size_t i = 0; i < input.length(); ++i) {
         EEPROM.write(*addr, input[i]);
         (*addr)++;
     }
@@ -96,11 +102,11 @@ void writeStringToEEPROM(int* addr, const std::string& input) {
     (*addr)++;
 }
 
-std::string readStringFromEEPROM(int* addr, size_t maxlen) {
+std::string readStringFromEEPROM(int *addr, size_t maxlen) {
     std::string result;
     result.reserve(maxlen);
 
-    for (size_t i=0; i < maxlen; ++i) {
+    for (size_t i = 0; i < maxlen; ++i) {
         char ch = EEPROM.read(*addr);
         (*addr)++;
         if (ch == '\0') {
@@ -133,7 +139,6 @@ void openClose(const std::string& finalPos) {
 
 void setup() {
     Serial.begin(115200);
-    pinMode(LIMIT_SWITCH_PIN, INPUT_PULLUP);
     pinMode(SERVO_ENABLE_PIN, OUTPUT);
     myservo.attach(SERVO_PWM_PIN);
     
@@ -145,15 +150,19 @@ void setup() {
 
     EEPROM.begin(512);
     int addr = 0;
-    // +1 is important! When we wrote CHKSUM_STR, we occupied CHKSUM_STR.length()+1 
-    // bytes (1 for the trailing \0 character). Hence make sure to read upto the \0
-    // character again
-    auto chksum = readStringFromEEPROM(&addr, CHKSUM_STR.length()+1);
+    // +1 is important! When we wrote CHKSUM_STR, we occupied
+    // CHKSUM_STR.length()+1 bytes (1 for the trailing \0 character). Hence make
+    // sure to read upto the \0 character again
+    auto chksum = readStringFromEEPROM(&addr, CHKSUM_STR.length() + 1);
     if (chksum == CHKSUM_STR) {
         GATE_ID = readStringFromEEPROM(&addr, 10);
-        EEPROM.get(addr, openPos); addr += sizeof(openPos);
-        EEPROM.get(addr, closedPos); addr += sizeof(closedPos);
-        logMessage("Reading from EEPROM, gate+id = %s, openPos = %d, closePos = %d\n", GATE_ID.c_str(), openPos, closedPos);
+        EEPROM.get(addr, openPos);
+        addr += sizeof(openPos);
+        EEPROM.get(addr, closePos);
+        addr += sizeof(closePos);
+        logMessage(
+            "Reading from EEPROM, gate+id = %s, openPos = %d, closePos = %d\n",
+            GATE_ID.c_str(), openPos, closePos);
     } else {
         logMessage("Uninitialized data in EEPROM: %s\n", chksum.c_str());
     }
@@ -190,13 +199,13 @@ void setLimits() {
 }
 
 void loop() {
-    if (!client.connected()) {   
-        connect();    
+    if (!client.connected()) {
+        connect();
     } else {
         client.loop();
-        delay(10);  // <- fixes some issues with WiFi stability
+        delay(10); // <- fixes some issues with WiFi stability
     }
-    
+
     if (topicStr == "gatecmd") {
         openClose(payloadStr);
         publish("/gateack", payloadStr.c_str());
@@ -208,8 +217,10 @@ void loop() {
         int addr = 0;
         writeStringToEEPROM(&addr, CHKSUM_STR);
         writeStringToEEPROM(&addr, GATE_ID);
-        EEPROM.put(addr, closedPos); addr += sizeof(closedPos);
-        EEPROM.put(addr, openPos); addr += sizeof(openPos);
+        EEPROM.put(addr, closePos);
+        addr += sizeof(closePos);
+        EEPROM.put(addr, openPos);
+        addr += sizeof(openPos);
         EEPROM.commit();
         publish("/flashack", "done");
     } else if (payloadStr != "") {
