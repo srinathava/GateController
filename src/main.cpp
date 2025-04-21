@@ -27,8 +27,9 @@ const std::string CHKSUM_STR = "2025-03-05-01";
 WiFiClient net;
 MQTTClient client;
 
-int closePos = 20;
-int openPos = 110;
+// Default values of close/open. Usually close is the "higher" value
+int closePos = 110;
+int openPos = 20;
 
 Servo myservo;
 
@@ -86,7 +87,7 @@ void connect() {
 }
 
 void messageReceived(String &topic, String &payload) {
-    logMessage("incoming message: %s %s\n", topic.c_str(), payload.c_str());
+    logMessage("Incoming message: %s %s\n", topic.c_str(), payload.c_str());
     topicStr = topic.c_str();
     // Remove the initial "/" and the final substring like "/10"
     topicStr = topicStr.substr(1, topicStr.size() - GATE_ID.size() - 2);
@@ -127,9 +128,9 @@ void openClose(const std::string& finalPos) {
     if (finalPos == "open") {
         myservo.write(openPos);
     } else if (finalPos == "close") {
-        myservo.write(closedPos);
+        myservo.write(closePos);
     } else if (finalPos == "middle") {
-        auto midPos = (openPos + closedPos)/2;
+        auto midPos = (openPos + closePos)/2;
         myservo.write(midPos);
     }
     delay(SERVO_MOVE_TIME_MS);
@@ -191,7 +192,7 @@ void setLimits() {
     }
     
     // Set the appropriate target
-    int& target = (topicStr == "setclosepos") ? closedPos : openPos;
+    int& target = (topicStr == "setclosepos") ? closePos : openPos;
     target = value;
     logMessage("Setting %s = %d\n", topicStr.c_str(), target);
     gatePos = "";
@@ -223,6 +224,7 @@ void loop() {
         addr += sizeof(openPos);
         EEPROM.commit();
         publish("/flashack", "done");
+        logMessage("Flashed current position\n");
     } else if (payloadStr != "") {
         logMessage("Invalid command %s %s\n", topicStr.c_str(), payloadStr.c_str());
     }
@@ -236,7 +238,7 @@ void loop() {
         os << "{"
             << "\"gatePos\": \"" << gatePos.c_str() << "\""
             << ", \"openPos\": " << openPos
-            << ", \"closedPos\": " << closedPos
+            << ", \"closePos\": " << closePos
             << "}";
         auto status = os.str();
         publish("/heartbeat", status.c_str());
