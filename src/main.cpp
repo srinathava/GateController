@@ -11,7 +11,7 @@
 WiFiClient net;
 MQTTClient client;
 
-std::string GATE_ID = "10";
+std::string GATE_ID = "4";
 
 const int LIMIT_SWITCH_PIN = D1;
 const int SERVO_PWM_PIN = D4;
@@ -19,17 +19,17 @@ const int SERVO_ENABLE_PIN = D8;
 const int SERVO_MOVE_TIME_MS = 1000;
 
 // Changing this string will invalidate the existing contents.
-const std::string CHKSUM_STR = "2025-03-02-01";
+const std::string CHKSUM_STR = "2025-03-02-02";
 
-int closedPos = 20;
-int openPos = 110;
+int closedPos = 40;
+int openPos = 80;
 
 Servo myservo;
 
 std::string topicStr = "";
 std::string payloadStr = "";
 
-std::string gatePos = "close";
+std::string gatePos = "";
 
 void publish(const std::string& topic, const std::string& payload) {
     auto fullTopic = topic + "/" + GATE_ID;
@@ -58,31 +58,32 @@ void subscribe(const std::string& topic) {
 }
 
 void connect() {
-    logMessage("checking wifi...");
-    while (WiFi.status() != WL_CONNECTED) {
-        logMessage(".");
-        delay(1000);
+    if (WiFi.status() != WL_CONNECTED) {
+        logMessage("Connecting...");
+        while (WiFi.status() != WL_CONNECTED) {
+            logMessage(".");
+            delay(1000);
+        }
+        auto ipAddr = WiFi.localIP();
+        auto ipAddrStr = ipAddr.toString();
+        logMessage("\nIP address: %s\n", ipAddrStr.c_str());
     }
-    logMessage("\nconnected! Local IP: %s", WiFi.localIP().toString().c_str());
 
-    logMessage("\nconnecting...");
     auto clientId ="savadhan-nodemcu-gate-" + GATE_ID;
     while (!client.connect(clientId.c_str())) {
-        logMessage(".");
         delay(1000);
     }
-
-    logMessage("\nconnected!\n");
-
-    publish("/heartbeat", "hello");
     subscribe("/gatecmd");
+    subscribe("/setopenpos");
+    subscribe("/setclosepos");
+    subscribe("/flash");
 }
 
 void messageReceived(String &topic, String &payload) {
     logMessage("incoming message: %s %s\n", topic.c_str(), payload.c_str());
     topicStr = topic.c_str();
-    // Remove the final substring like "/10"
-    topicStr = topicStr.substr(0, topicStr.size() - GATE_ID.size() - 1);
+    // Remove the initial "/" and the final substring like "/10"
+    topicStr = topicStr.substr(1, topicStr.size() - GATE_ID.size() - 2);
     payloadStr = payload.c_str();
 }
 
@@ -110,20 +111,32 @@ std::string readStringFromEEPROM(int* addr, size_t maxlen) {
     return result;
 }
 
+void openClose(const std::string& finalPos) {
+    logMessage("Processing move cmd: %s\n", finalPos.c_str());
+
+    if (gatePos == finalPos)
+        return;
+    
+    digitalWrite(SERVO_ENABLE_PIN, HIGH);
+    if (finalPos == "open") {
+        myservo.write(openPos);
+    } else if (finalPos == "close") {
+        myservo.write(closedPos);
+    } else if (finalPos == "middle") {
+        auto midPos = (openPos + closedPos)/2;
+        myservo.write(midPos);
+    }
+    delay(SERVO_MOVE_TIME_MS);
+    digitalWrite(SERVO_ENABLE_PIN, LOW);
+    gatePos = finalPos;
+}
+
 void setup() {
     Serial.begin(115200);
     pinMode(LIMIT_SWITCH_PIN, INPUT_PULLUP);
     pinMode(SERVO_ENABLE_PIN, OUTPUT);
     myservo.attach(SERVO_PWM_PIN);
     
-    digitalWrite(SERVO_ENABLE_PIN, HIGH);
-
-    myservo.write(closedPos);
-    delay(SERVO_MOVE_TIME_MS);
-    gatePos = "close";
-
-    digitalWrite(SERVO_ENABLE_PIN, LOW);
-
     WiFi.mode(WIFI_STA);
     WiFi.begin(WIFI_SSID, WIFI_PASS);
 
@@ -146,29 +159,10 @@ void setup() {
     }
 
     connect();
+    openClose("close");
 }
 
 unsigned long lastMillis = 0;
-
-void openClose(const std::string& finalPos) {
-    logMessage("Processing move cmd: %s\n", finalPos.c_str());
-
-    if (gatePos == finalPos)
-        return;
-    
-    digitalWrite(SERVO_ENABLE_PIN, HIGH);
-    if (finalPos == "open") {
-        myservo.write(openPos);
-    } else if (finalPos == "close") {
-        myservo.write(closedPos);
-    } else if (finalPos == "middle") {
-        auto midPos = (openPos + closedPos)/2;
-        myservo.write(midPos);
-    }
-    delay(SERVO_MOVE_TIME_MS);
-    digitalWrite(SERVO_ENABLE_PIN, LOW);
-    gatePos = finalPos;
-}
 
 void setLimits() {
     // First check if the string is empty
@@ -188,9 +182,11 @@ void setLimits() {
     }
     
     // Set the appropriate target
-    int& target = (topicStr == "gatemin") ? closedPos : openPos;
+    int& target = (topicStr == "setclosepos") ? closedPos : openPos;
     target = value;
     logMessage("Setting %s = %d\n", topicStr.c_str(), target);
+    gatePos = "";
+    openClose(topicStr == "setclosepos" ? "close" : "open");
 }
 
 void loop() {
@@ -203,8 +199,10 @@ void loop() {
     
     if (topicStr == "gatecmd") {
         openClose(payloadStr);
-    } else if (topicStr == "gatemin" || topicStr == "gatemax") {
+        publish("/gateack", payloadStr.c_str());
+    } else if (topicStr == "setclosepos" || topicStr == "setopenpos") {
         setLimits();
+        publish("/limitsack", topicStr.c_str());
     } else if (topicStr == "flash") {
         EEPROM.begin(512);
         int addr = 0;
@@ -213,21 +211,19 @@ void loop() {
         EEPROM.put(addr, closedPos); addr += sizeof(closedPos);
         EEPROM.put(addr, openPos); addr += sizeof(openPos);
         EEPROM.commit();
+        publish("/flashack", "done");
     } else if (payloadStr != "") {
-        logMessage("Invalid command %s %s\n", topicStr, payloadStr);
-        payloadStr = "";
+        logMessage("Invalid command %s %s\n", topicStr.c_str(), payloadStr.c_str());
     }
 
-    if (payloadStr != "") {
-        publish("/gateack", payloadStr.c_str());
-        payloadStr = "";
-    }
+    topicStr = "";
+    payloadStr = "";
 
     auto millisNow = millis();
     if (millisNow - lastMillis > 3000) {
         std::ostringstream os;
         os << "{"
-            << "\"gatePos\" : \"" << gatePos.c_str()
+            << "\"gatePos\": \"" << gatePos.c_str() << "\""
             << ", \"openPos\": " << openPos
             << ", \"closedPos\": " << closedPos
             << "}";
