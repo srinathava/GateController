@@ -36,7 +36,7 @@ std::string topicStr = "";
 std::string payloadStr = "";
 
 std::string gatePosStr = "close";
-int gatePosInt = closePos;
+int gatePosInt = -1;
 
 void publish(const std::string &topic, const std::string &payload) {
     auto fullTopic = topic + "/" + GATE_ID;
@@ -131,9 +131,7 @@ std::string readStringFromEEPROM(int *addr, size_t maxlen) {
 void moveServoTo(const std::string &finalPos) {
     logMessage("Processing move cmd: %s\n", finalPos.c_str());
 
-    if (gatePosStr == finalPos)
-        return;
-
+    int prevGatePosInt = gatePosInt;
     if (finalPos == "open") {
         gatePosInt = openPos;
     } else if (finalPos == "close") {
@@ -143,6 +141,10 @@ void moveServoTo(const std::string &finalPos) {
         gatePosInt = (openPos + closePos) / 2;
     } else {
         logMessage("Unknown target position %s\n", finalPos.c_str());
+        return;
+    }
+    if (gatePosStr == finalPos && prevGatePosInt == gatePosInt) {
+        logMessage("Already at position %s\n", finalPos.c_str());
         return;
     }
 
